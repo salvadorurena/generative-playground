@@ -104,6 +104,14 @@ button.primary {
 
 button.primary:hover { filter: brightness(1.08); }
 
+button.recording {
+  background: #d64545;
+  border-color: #d64545;
+  color: #fff;
+}
+
+button.recording:hover { background: #e05252; }
+
 kbd {
   font: inherit;
   font-size: 11px;

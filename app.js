@@ -168,6 +168,7 @@ const MODES = {
 
   bloom: {
     name: 'Fractal Bloom',
+    pace: 5, // few, heavy frames: hold each level so the growth is visible
     params: [
       { key: 'depth', label: 'Depth', min: 2, max: 11, step: 1, value: 8 },
       { key: 'branches', label: 'Branches', min: 2, max: 4, step: 1, value: 2 },
@@ -219,6 +220,336 @@ const MODES = {
           ctx.lineWidth = Math.max(0.3, p.width * (1 - d / depth));
           ctx.stroke(levels[d]);
           return ++frame >= depth;
+        },
+      };
+    },
+  },
+  circles: {
+    name: 'Circle Packing',
+    pace: 3,
+    params: [
+      { key: 'count', label: 'Max circles', min: 50, max: 3000, step: 50, value: 800 },
+      { key: 'maxSize', label: 'Max size (%)', min: 2, max: 30, step: 0.5, value: 10 },
+      { key: 'minSize', label: 'Min size (%)', min: 0.2, max: 3, step: 0.1, value: 0.5 },
+      { key: 'padding', label: 'Padding (%)', min: 0, max: 2, step: 0.05, value: 0.3 },
+      { key: 'variation', label: 'Size variation', min: 0, max: 1, step: 0.01, value: 0.5 },
+      { key: 'style', label: 'Style', min: 0, max: 2, step: 1, value: 2, labels: ['Solid', 'Rings', 'Targets'] },
+      { key: 'rings', label: 'Rings', min: 2, max: 8, step: 1, value: 4 },
+      { key: 'width', label: 'Ring width', min: 0.5, max: 4, step: 0.1, value: 1.2 },
+    ],
+    create({ ctx, w, h, rng, noise, bg, inks, p }) {
+      const unit = Math.min(w, h) / 100;
+      const maxR = p.maxSize * unit, minR = p.minSize * unit, pad = p.padding * unit;
+      const ns = 2 / Math.min(w, h), ox = rng() * 1000;
+      const circles = [];
+      let frame = 0, idle = 0;
+
+      const drawNew = list => {
+        const levels = p.style === 0 ? 1 : p.rings;
+        for (let k = 0; k < levels; k++) {
+          // One path per color per ring level; circles never overlap, so levels can batch.
+          const paths = new Map();
+          for (const c of list) {
+            const color = p.style === 2 && k % 2 ? bg : inks[(c.ci + (p.style === 1 ? k : 0)) % inks.length];
+            const rr = p.style === 1 ? c.r * (1 - k / levels) - p.width / 2 : c.r * (1 - k / levels);
+            if (rr <= 0) continue;
+            if (!paths.has(color)) paths.set(color, new Path2D());
+            const path = paths.get(color);
+            path.moveTo(c.x + rr, c.y);
+            path.arc(c.x, c.y, rr, 0, TAU);
+          }
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = p.width;
+          for (const [color, path] of paths) {
+            if (p.style === 1) { ctx.strokeStyle = color; ctx.stroke(path); }
+            else { ctx.fillStyle = color; ctx.fill(path); }
+          }
+        }
+      };
+
+      return {
+        step() {
+          const added = [];
+          for (let attempt = 0; attempt < 400 && circles.length < p.count; attempt++) {
+            const x = rng() * w, y = rng() * h;
+            const n01 = (noise(x * ns + ox, y * ns) + 1) / 2;
+            let r = Math.min(x, y, w - x, h - y) - pad;
+            const cap = maxR * (1 - p.variation * n01);
+            if (r > cap) r = cap;
+            for (let i = 0; i < circles.length && r >= minR; i++) {
+              const c = circles[i];
+              const d = Math.hypot(c.x - x, c.y - y) - c.r - pad;
+              if (d < r) r = d;
+            }
+            const pick = rng();
+            if (r < minR) continue;
+            const c = { x, y, r, ci: Math.floor(pick * inks.length) };
+            circles.push(c);
+            added.push(c);
+          }
+          if (added.length) { drawNew(added); idle = 0; } else idle++;
+          return ++frame >= 900 || circles.length >= p.count || idle > 40;
+        },
+      };
+    },
+  },
+
+  voronoi: {
+    name: 'Voronoi Mosaic',
+    params: [
+      { key: 'cells', label: 'Cells', min: 20, max: 2000, step: 10, value: 400 },
+      { key: 'order', label: 'Order', min: 0, max: 1, step: 0.01, value: 0.2 },
+      { key: 'cluster', label: 'Clustering', min: 0, max: 1, step: 0.01, value: 0.4 },
+      { key: 'regions', label: 'Color regions', min: 0.5, max: 8, step: 0.1, value: 2 },
+      { key: 'lead', label: 'Lead width', min: 0, max: 8, step: 0.1, value: 2.5 },
+      { key: 'shade', label: 'Shading', min: 0, max: 1, step: 0.01, value: 0.4 },
+    ],
+    create({ ctx, w, h, rng, noise, bg, inks, p }) {
+      const n = p.cells;
+      const cs = 3 / Math.min(w, h), ox = rng() * 1000;
+
+      // Sites: blend uniform-random (thinned by noise for clustering) with a hex-ish grid.
+      const cols = Math.max(1, Math.round(Math.sqrt(n * w / h))), rows = Math.ceil(n / cols);
+      const sites = [];
+      for (let i = 0; i < n; i++) {
+        let rx, ry;
+        do {
+          rx = rng() * w; ry = rng() * h;
+        } while (rng() > 1 - p.cluster + p.cluster * ((noise(rx * cs + ox, ry * cs) + 1) / 2) ** 2);
+        const row = Math.floor(i / cols);
+        const gx = ((i % cols) + 0.5 + (row % 2) * 0.5) * w / cols + (rng() - 0.5) * w / cols * 0.3;
+        const gy = (row + 0.5) * h / rows + (rng() - 0.5) * h / rows * 0.3;
+        sites.push({ x: rx + (gx - rx) * p.order, y: ry + (gy - ry) * p.order, r: rng() });
+      }
+      sites.sort((a, b) => Math.hypot(a.x - w / 2, a.y - h / 2) - Math.hypot(b.x - w / 2, b.y - h / 2));
+
+      // Keep the half-plane closer to the site than to (dx, dy) away; Sutherland–Hodgman.
+      const clip = (poly, mx, my, dx, dy) => {
+        const out = [];
+        for (let i = 0; i < poly.length; i += 2) {
+          const j = (i + 2) % poly.length;
+          const ax = poly[i], ay = poly[i + 1], bx = poly[j], by = poly[j + 1];
+          const da = (ax - mx) * dx + (ay - my) * dy, db = (bx - mx) * dx + (by - my) * dy;
+          if (da <= 0) out.push(ax, ay);
+          if ((da <= 0) !== (db <= 0)) {
+            const t = da / (da - db);
+            out.push(ax + (bx - ax) * t, ay + (by - ay) * t);
+          }
+        }
+        return out;
+      };
+
+      const m = p.lead + 1;
+      const cellPoly = s => {
+        let poly = [-m, -m, w + m, -m, w + m, h + m, -m, h + m];
+        const others = sites.map(o => ({ o, d: (o.x - s.x) ** 2 + (o.y - s.y) ** 2 }))
+          .filter(e => e.d > 0).sort((a, b) => a.d - b.d);
+        let r2 = Infinity;
+        for (const { o, d } of others) {
+          if (d > 4 * r2) break; // bisector is beyond the cell's farthest vertex
+          poly = clip(poly, (s.x + o.x) / 2, (s.y + o.y) / 2, o.x - s.x, o.y - s.y);
+          r2 = 0;
+          for (let i = 0; i < poly.length; i += 2) r2 = Math.max(r2, (poly[i] - s.x) ** 2 + (poly[i + 1] - s.y) ** 2);
+        }
+        return poly;
+      };
+
+      const perFrame = Math.ceil(n / 90);
+      let next = 0;
+      return {
+        step() {
+          const fills = new Map(), lead = new Path2D();
+          for (const s of sites.slice(next, next + perFrame)) {
+            const poly = cellPoly(s);
+            if (poly.length < 6) continue;
+            const n01 = (noise(s.x * cs * p.regions / 3 + ox + 50, s.y * cs * p.regions / 3) + 1) / 2;
+            const ci = Math.min(inks.length - 1, Math.floor((n01 + (s.r - 0.5) * 0.4) * inks.length));
+            const level = Math.floor(s.r * 3);
+            const key = `${Math.max(0, ci)}:${level}`;
+            if (!fills.has(key)) fills.set(key, new Path2D());
+            const path = new Path2D();
+            path.moveTo(poly[0], poly[1]);
+            for (let i = 2; i < poly.length; i += 2) path.lineTo(poly[i], poly[i + 1]);
+            path.closePath();
+            fills.get(key).addPath(path);
+            lead.addPath(path);
+          }
+          next += perFrame;
+          ctx.lineJoin = 'round';
+          for (const [key, path] of fills) {
+            const [ci, level] = key.split(':').map(Number);
+            ctx.globalAlpha = 1 - p.shade * level * 0.3;
+            ctx.fillStyle = inks[ci];
+            ctx.fill(path);
+          }
+          if (p.lead > 0) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = bg;
+            ctx.lineWidth = p.lead;
+            ctx.stroke(lead);
+          }
+          return next >= sites.length;
+        },
+      };
+    },
+  },
+
+  truchet: {
+    name: 'Truchet Tiles',
+    params: [
+      { key: 'tiles', label: 'Tiles across', min: 4, max: 60, step: 1, value: 16 },
+      { key: 'style', label: 'Style', min: 0, max: 3, step: 1, value: 1, labels: ['Arcs', 'Outlined arcs', 'Diagonals', 'Triangles'] },
+      { key: 'width', label: 'Line width', min: 0.05, max: 0.5, step: 0.01, value: 0.18 },
+      { key: 'bias', label: 'Flow', min: 0, max: 1, step: 0.01, value: 0.3 },
+      { key: 'colors', label: 'Colors', min: 1, max: 4, step: 1, value: 3 },
+      { key: 'regions', label: 'Color regions', min: 0.5, max: 6, step: 0.1, value: 1.5 },
+    ],
+    create({ ctx, w, h, rng, noise, bg, inks, p }) {
+      const s = Math.min(w, h) / p.tiles;
+      const cols = Math.ceil(w / s), rows = Math.ceil(h / s);
+      const x0 = (w - cols * s) / 2, y0 = (h - rows * s) / 2;
+      const ns = 1.5 / Math.min(w, h), ox = rng() * 1000;
+      const nc = Math.min(p.colors, inks.length);
+
+      const tiles = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const x = x0 + c * s, y = y0 + r * s;
+          const r1 = rng(), r2 = rng();
+          const flip = r1 < p.bias ? noise(x * ns + ox, y * ns) > 0 : r2 < 0.5;
+          // Perlin values cluster near 0; stretch them so every color gets used.
+          const n01 = Math.min(1, Math.max(0, (noise(x * ns * p.regions + ox + 99, y * ns * p.regions) * 1.8 + 1) / 2));
+          const ci = Math.min(nc - 1, Math.floor(n01 * nc));
+          const d = Math.hypot(x + s / 2 - w / 2, y + s / 2 - h / 2) + rng() * s * 2;
+          tiles.push({ x, y, flip, ci, d });
+        }
+      }
+      tiles.sort((a, b) => a.d - b.d); // ripple out from the center
+
+      const addTile = (path, t) => {
+        const { x, y } = t, hs = s / 2;
+        if (p.style <= 1) {
+          if (!t.flip) {
+            path.moveTo(x + hs, y); path.arc(x, y, hs, 0, Math.PI / 2);
+            path.moveTo(x + hs, y + s); path.arc(x + s, y + s, hs, Math.PI, Math.PI * 1.5);
+          } else {
+            path.moveTo(x + s, y + hs); path.arc(x + s, y, hs, Math.PI / 2, Math.PI);
+            path.moveTo(x, y + hs); path.arc(x, y + s, hs, Math.PI * 1.5, TAU);
+          }
+        } else if (p.style === 2) {
+          if (!t.flip) { path.moveTo(x, y); path.lineTo(x + s, y + s); }
+          else { path.moveTo(x + s, y); path.lineTo(x, y + s); }
+        } else {
+          if (!t.flip) { path.moveTo(x, y); path.lineTo(x + s, y); path.lineTo(x, y + s); }
+          else { path.moveTo(x + s, y); path.lineTo(x + s, y + s); path.lineTo(x, y); }
+          path.closePath();
+        }
+      };
+
+      const perFrame = Math.ceil(tiles.length / 60);
+      let next = 0;
+      return {
+        step() {
+          const paths = inks.map(() => new Path2D()), all = new Path2D();
+          for (const t of tiles.slice(next, next + perFrame)) {
+            addTile(paths[t.ci], t);
+            addTile(all, t);
+          }
+          next += perFrame;
+          ctx.globalAlpha = 1;
+          ctx.lineCap = p.style === 2 ? 'round' : 'butt';
+          if (p.style === 1) {
+            ctx.strokeStyle = bg;
+            ctx.lineWidth = p.width * s * 1.7;
+            ctx.stroke(all);
+          }
+          ctx.lineWidth = p.width * s;
+          paths.forEach((path, i) => {
+            if (p.style === 3) { ctx.fillStyle = inks[i]; ctx.fill(path); }
+            else { ctx.strokeStyle = inks[i]; ctx.stroke(path); }
+          });
+          return next >= tiles.length;
+        },
+      };
+    },
+  },
+
+  diffusion: {
+    name: 'Reaction–Diffusion',
+    params: [
+      { key: 'pattern', label: 'Pattern', min: 0, max: 5, step: 1, value: 0, labels: ['Coral', 'Mitosis', 'Maze', 'Worms', 'Spots', 'Holes'] },
+      { key: 'res', label: 'Detail', min: 80, max: 320, step: 10, value: 180 },
+      { key: 'seeds', label: 'Seeds', min: 1, max: 40, step: 1, value: 12 },
+      { key: 'speed', label: 'Speed', min: 2, max: 30, step: 1, value: 12 },
+      { key: 'duration', label: 'Duration', min: 100, max: 900, step: 10, value: 400 },
+      { key: 'contrast', label: 'Contrast', min: 0.5, max: 3, step: 0.05, value: 1 },
+    ],
+    create({ ctx, w, h, rng, bg, inks, p }) {
+      // Gray–Scott feed/kill rates for each pattern.
+      const [f, k] = [[0.0545, 0.062], [0.0367, 0.0649], [0.029, 0.057], [0.078, 0.061], [0.03, 0.062], [0.039, 0.058]][p.pattern];
+      const cell = Math.min(w, h) / p.res;
+      const gw = Math.max(8, Math.round(w / cell)), gh = Math.max(8, Math.round(h / cell)), N = gw * gh;
+      let A = new Float32Array(N).fill(1), B = new Float32Array(N);
+      let A2 = new Float32Array(N), B2 = new Float32Array(N);
+
+      for (let i = 0; i < p.seeds; i++) {
+        const cx = Math.floor(rng() * gw), cy = Math.floor(rng() * gh);
+        const r = 2 + Math.floor(rng() * Math.max(2, gw / 30));
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (dx * dx + dy * dy > r * r) continue;
+            B[((cy + dy + gh) % gh) * gw + (cx + dx + gw) % gw] = 1;
+          }
+        }
+      }
+
+      // Color lookup: background → inks along concentration of B.
+      const stops = [bg, ...inks].map(c => { const v = parseInt(c.slice(1), 16); return [v >> 16 & 255, v >> 8 & 255, v & 255]; });
+      const lut = new Uint8ClampedArray(256 * 3);
+      for (let i = 0; i < 256; i++) {
+        const t = i / 255 * (stops.length - 1), a = Math.floor(t), b = Math.min(a + 1, stops.length - 1), u = t - a;
+        for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[a][c] + (stops[b][c] - stops[a][c]) * u;
+      }
+
+      const small = document.createElement('canvas');
+      small.width = gw; small.height = gh;
+      const sctx = small.getContext('2d');
+      const img = sctx.createImageData(gw, gh);
+
+      const iterate = () => {
+        for (let y = 0; y < gh; y++) {
+          const ym = ((y - 1 + gh) % gh) * gw, y0 = y * gw, yp = ((y + 1) % gh) * gw;
+          for (let x = 0; x < gw; x++) {
+            const xm = (x - 1 + gw) % gw, xp = (x + 1) % gw, i = y0 + x;
+            const a = A[i], b = B[i];
+            const la = 0.2 * (A[y0 + xm] + A[y0 + xp] + A[ym + x] + A[yp + x])
+              + 0.05 * (A[ym + xm] + A[ym + xp] + A[yp + xm] + A[yp + xp]) - a;
+            const lb = 0.2 * (B[y0 + xm] + B[y0 + xp] + B[ym + x] + B[yp + x])
+              + 0.05 * (B[ym + xm] + B[ym + xp] + B[yp + xm] + B[yp + xp]) - b;
+            const abb = a * b * b;
+            A2[i] = a + la - abb + f * (1 - a);
+            B2[i] = b + 0.5 * lb + abb - (k + f) * b;
+          }
+        }
+        [A, A2] = [A2, A];
+        [B, B2] = [B2, B];
+      };
+
+      let frame = 0;
+      return {
+        step() {
+          for (let i = 0; i < p.speed; i++) iterate();
+          const d = img.data;
+          for (let i = 0, j = 0; i < N; i++, j += 4) {
+            const li = Math.min(255, Math.max(0, B[i] * 2.5 * p.contrast * 255 | 0)) * 3;
+            d[j] = lut[li]; d[j + 1] = lut[li + 1]; d[j + 2] = lut[li + 2]; d[j + 3] = 255;
+          }
+          sctx.putImageData(img, 0, 0);
+          ctx.globalAlpha = 1;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(small, 0, 0, w, h);
+          return ++frame >= p.duration;
         },
       };
     },
@@ -400,6 +731,7 @@ let render = null, size = { w: 1, h: 1, dpr: 1 };
 let done = false, paused = false, dirty = true, needsCompose = false, frames = 0;
 let presenting = false, exporting = false, exportMsg = '';
 let flashMsg = '', flashUntil = 0;
+let tick = 0;
 
 function canvasSize() {
   const pad = state.aspect === 'fill' || presenting ? 0 : 24;
@@ -414,6 +746,7 @@ function canvasSize() {
 function restart() {
   const dpr = window.devicePixelRatio || 1;
   const { w, h } = canvasSize();
+  if (recorder && (w !== size.w || h !== size.h)) stopRecording();
   view.style.width = w + 'px';
   view.style.height = h + 'px';
   view.width = Math.round(w * dpr);
@@ -433,10 +766,19 @@ function loop() {
     restart();
     needsCompose = true;
   }
-  if (!paused && !done) {
+  if (recordPending) {
+    recordPending = false;
+    beginRecording();
+  }
+  if (!paused && !done && ++tick % (MODES[state.mode].pace || 1) === 0) {
     done = render.runner.step();
     frames++;
     needsCompose = true;
+  }
+  if (recorder) {
+    // Repaint every frame so the stream keeps producing frames; hold the finished piece briefly.
+    needsCompose = true;
+    if (done && --recordHold <= 0) stopRecording();
   }
   if (needsCompose) {
     needsCompose = false;
@@ -448,6 +790,7 @@ function loop() {
 function updateStatus() {
   let text;
   if (performance.now() < flashUntil) text = flashMsg;
+  else if (recorder) text = `● Recording · ${((performance.now() - recordStart) / 1000).toFixed(1)}s`;
   else if (exporting) text = exportMsg;
   else text = done ? `Done · ${frames} frames` : paused ? 'Paused' : `Rendering · frame ${frames}`;
   if (statusEl.textContent !== text) statusEl.textContent = text;
@@ -484,6 +827,14 @@ function updateExportLabels() {
 
 const nextFrame = () => new Promise(r => requestAnimationFrame(r));
 
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 async function savePng() {
   if (exporting) return;
   exporting = true;
@@ -514,11 +865,7 @@ async function savePng() {
     }
     const blob = await new Promise(r => out.toBlob(r, 'image/png'));
     if (!blob) throw new Error('toBlob failed');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    download(blob, name);
     flash(`Saved ${out.width}×${out.height} PNG`);
   } catch {
     flash('Export failed — try a smaller size');
@@ -526,6 +873,65 @@ async function savePng() {
     exporting = false;
     saveBtn.disabled = false;
   }
+}
+
+// ---------- Video ----------
+// Records the visible canvas from frame 0 until the piece finishes (plus a short hold).
+
+const recordBtn = $('record');
+const RECORD_HOLD_FRAMES = 90;
+let recorder = null, recordPending = false, recordHold = 0, recordStart = 0;
+
+function pickVideoType() {
+  if (!window.MediaRecorder || !view.captureStream) return null;
+  return ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(t => MediaRecorder.isTypeSupported(t)) ?? null;
+}
+
+function toggleRecording() {
+  if (recorder) stopRecording();
+  else if (!recordPending) startRecording();
+}
+
+function startRecording() {
+  if (!pickVideoType()) {
+    flash('Video recording isn’t supported in this browser');
+    return;
+  }
+  if (paused) togglePause();
+  dirty = true; // restart the piece, then begin recording on the next loop tick
+  recordPending = true;
+}
+
+function beginRecording() {
+  const type = pickVideoType();
+  const stream = view.captureStream(60);
+  const chunks = [];
+  const name = `${state.mode}-${state.palette.toLowerCase()}-${state.seed}.${type.startsWith('video/mp4') ? 'mp4' : 'webm'}`;
+  recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 12e6 });
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    download(new Blob(chunks, { type: type.split(';')[0] }), name);
+    flash('Saved video');
+  };
+  recorder.start();
+  recordHold = RECORD_HOLD_FRAMES;
+  recordStart = performance.now();
+  paintRecordButton();
+}
+
+function stopRecording() {
+  if (!recorder) return;
+  const r = recorder;
+  recorder = null;
+  r.stop();
+  paintRecordButton();
+}
+
+function paintRecordButton() {
+  recordBtn.classList.toggle('recording', !!recorder);
+  recordBtn.innerHTML = `${recorder ? 'Stop recording' : 'Record video'} <kbd>V</kbd>`;
 }
 
 // ---------- Favorites ----------
@@ -609,10 +1015,11 @@ function makeSlider(q, values, onChange, locks) {
   const input = document.createElement('input');
   Object.assign(input, { type: 'range', min: q.min, max: q.max, step: q.step });
   input.value = values[q.key];
-  out.textContent = Number(input.value).toFixed(decimals(q.step));
+  const fmt = v => q.labels ? q.labels[v] : Number(v).toFixed(decimals(q.step));
+  out.textContent = fmt(input.value);
   input.addEventListener('input', () => {
     values[q.key] = Number(input.value);
-    out.textContent = Number(input.value).toFixed(decimals(q.step));
+    out.textContent = fmt(input.value);
     onChange();
   });
 
@@ -739,6 +1146,7 @@ $('share').addEventListener('click', copyLink);
 $('present').addEventListener('click', () => setPresenting(true));
 $('favorite').addEventListener('click', addFavorite);
 saveBtn.addEventListener('click', savePng);
+recordBtn.addEventListener('click', toggleRecording);
 
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) setPresenting(false);
@@ -750,6 +1158,7 @@ window.addEventListener('keydown', e => {
   if (key === 'r') randomize();
   else if (key === 's') savePng();
   else if (key === 'f') setPresenting(!presenting);
+  else if (key === 'v') toggleRecording();
   else if (key === 'escape') setPresenting(false);
   else if (key === ' ') { e.preventDefault(); togglePause(); }
 });
