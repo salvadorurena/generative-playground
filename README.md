@@ -87,3 +87,7 @@ Create `src/modes/yourMode.js` exporting `{ name, description, params, create }`
 ## Browser support
 
 Developed and tested in Chrome. It only uses standard APIs (canvas 2D, ES modules, `MediaRecorder`), so recent Edge, Safari and Firefox should work too. Video is saved as MP4 where the browser can record it, otherwise WebM. High-res PNG exports are capped at 16.7 megapixels to stay within Safari's canvas limit.
+
+## License
+
+[MIT](LICENSE): free to use, modify and share, including commercially, as long as the copyright notice is kept.
