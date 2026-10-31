@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generative Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside id="panel">
+    <header>
+      <h1>Generative Playground</h1>
+      <p class="sub">Tweak the sliders. Every seed is a new piece.</p>
+    </header>
+
+    <section class="group">
+      <label class="field">
+        <span class="label">Mode</span>
+        <select id="mode"></select>
+      </label>
+      <label class="field">
+        <span class="label">Palette</span>
+        <select id="palette"></select>
+      </label>
+      <div id="swatches"></div>
+      <label class="field">
+        <span class="label">Seed</span>
+        <div class="row">
+          <input id="seed" type="number" min="0" step="1">
+          <button id="reseed" type="button" title="New seed">New</button>
+        </div>
+      </label>
+    </section>
+
+    <section class="group" id="params"></section>
+
+    <section class="group actions">
+      <button id="randomize" type="button">Randomize <kbd>R</kbd></button>
+      <button id="pause" type="button">Pause <kbd>Space</kbd></button>
+      <button id="save" type="button" class="primary">Save PNG <kbd>S</kbd></button>
+    </section>
+
+    <p id="status" aria-live="polite"></p>
+  </aside>
+
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
