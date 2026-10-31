@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playground Tests</title>
+  <style>
+    :root {
+      --bg: #0e0e11;
+      --panel: #16161b;
+      --line: #2a2a33;
+      --text: #ececf1;
+      --muted: #8b8b98;
+      --pass: #3ecf8e;
+      --warn: #f2c14e;
+      --fail: #ff5c5c;
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color-scheme: dark;
+    }
+    body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text); }
+    main { max-width: 1040px; margin: 0 auto; }
+    header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+    h1 { margin: 0; font-size: 20px; }
+    .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .buttons { display: flex; gap: 8px; }
+    button {
+      font: inherit; font-size: 13px; color: var(--text); background: #1f1f26;
+      border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer;
+    }
+    button:hover { background: #24242c; }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    #summary {
+      margin: 20px 0; padding: 12px 14px; border-radius: 8px;
+      background: var(--panel); border: 1px solid var(--line); font-size: 14px;
+    }
+    #summary.pass { border-color: var(--pass); }
+    #summary.fail { border-color: var(--fail); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    td.name { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    td img, td canvas { display: block; width: 160px; height: 100px; border-radius: 4px; background: #000; }
+    .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+    .chip.pass { background: rgba(62, 207, 142, 0.15); color: var(--pass); }
+    .chip.warn { background: rgba(242, 193, 78, 0.15); color: var(--warn); }
+    .chip.fail { background: rgba(255, 92, 92, 0.15); color: var(--fail); }
+    .none { color: var(--muted); }
+    #app { position: absolute; left: -10000px; top: 0; width: 800px; height: 600px; border: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Playground Tests</h1>
+        <p class="sub">Each mode renders with fixed seeds and is compared against <code>tests/baseline.json</code>.</p>
+      </div>
+      <div class="buttons">
+        <button id="run" type="button">Run again</button>
+        <button id="update" type="button">Update baseline</button>
+      </div>
+    </header>
+
+    <div id="summary">Loading the app…</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Case</th>
+            <th>Baseline</th>
+            <th>Now</th>
+            <th>Matches baseline</th>
+            <th>Deterministic</th>
+            <th>1× vs 2×</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <iframe id="app" title="Playground under test" aria-hidden="true"></iframe>
+  <script src="run.js"></script>
+</body>
+</html>

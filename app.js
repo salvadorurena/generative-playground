@@ -621,26 +621,31 @@ function writeHash() {
 // Modes draw onto an offscreen "art" canvas; compose() copies it to the
 // target and layers the finish effects on top, so effects never accumulate.
 
-function startRender(w, h, k) {
+// spec: { mode, palette, seed, params } — defaults to the current UI state.
+function startRender(w, h, k, spec = currentSpec()) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(w * k));
   canvas.height = Math.max(1, Math.round(h * k));
   const ctx = canvas.getContext('2d');
   ctx.setTransform(k, 0, 0, k, 0, 0);
 
-  const colors = PALETTES[state.palette];
+  const colors = PALETTES[spec.palette];
   ctx.fillStyle = colors[0];
   ctx.fillRect(0, 0, w, h);
 
-  const rng = mulberry32(state.seed);
-  const runner = MODES[state.mode].create({
+  const rng = mulberry32(spec.seed);
+  const runner = MODES[spec.mode].create({
     ctx, w, h, rng,
     noise: makeNoise(rng),
     bg: colors[0],
     inks: colors.slice(1),
-    p: { ...state.params[state.mode] },
+    p: { ...spec.params },
   });
   return { canvas, runner };
+}
+
+function currentSpec() {
+  return { mode: state.mode, palette: state.palette, seed: state.seed, params: { ...state.params[state.mode] } };
 }
 
 function currentLook() {
@@ -1168,6 +1173,9 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { dirty = true; }, 150);
 });
+
+// Test hook: tests/index.html renders cases through this.
+window.__playground = { MODES, PALETTES, startRender, compose };
 
 readHash();
 syncControls();

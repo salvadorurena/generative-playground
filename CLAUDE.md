@@ -4,16 +4,25 @@ A browser-based generative art toy: pick a mode, tweak sliders, export PNGs. Pla
 
 ## Running
 
-Serve the folder statically:
-
 ```bash
-python3 -m http.server 5173
+python3 tests/server.py
 ```
 
-Then open http://localhost:5173. `.claude/launch.json` has the same config for the Claude desktop preview pane (`playground`).
+Then open http://localhost:5173. This is a plain static server plus one endpoint that lets the test page save its baseline (localhost only). `python3 -m http.server 5173` also works if you don't need to update baselines. `.claude/launch.json` runs the same server for the Claude desktop preview pane (`playground`).
+
+## Testing
+
+Open http://localhost:5173/tests/ — it runs automatically. Every case in `CASES` (`tests/run.js`) renders through the app's own `startRender`/`compose` (exposed as `window.__playground`) at 320×200 and checks:
+
+1. **Matches baseline** — exact pixel hash from `tests/baseline.json`, or a thumbnail within `CLOSE` (other browsers/GPUs antialias slightly differently).
+2. **Deterministic** — a re-render is bit-identical (one retry, since Chrome can switch a canvas between GPU and CPU raster mid-run).
+3. **Resolution independent** — 1× and 2× renders match once area-averaged to a thumbnail.
+
+Run it before and after any refactor. If a change is *meant* to alter output (new default, palette tweak), check the "Now" column looks right, then click **Update baseline** (needs `tests/server.py`) and commit `tests/baseline.json` with the change. When adding a mode, add at least a default case plus one variant. `window.testResults` holds the summary for scripted checks.
 
 ## Files
 
+- `tests/` — visual regression page (`index.html`, `run.js`), its `baseline.json`, and the dev `server.py`.
 - `index.html` — layout: control panel (`#panel`) and canvas stage (`#stage`).
 - `style.css` — dark UI; colors in `:root` variables; stacks vertically under 760px; `body.presenting` hides the panel.
 - `app.js` — everything else, in sections:
@@ -44,7 +53,7 @@ myMode: {
 }
 ```
 
-Sliders, locks, randomize, URL sharing, favorites and export all work automatically from the schema.
+Sliders, locks, randomize, URL sharing, favorites and export all work automatically from the schema. Then add cases for it in `tests/run.js` and update the baseline.
 
 ## Conventions
 
