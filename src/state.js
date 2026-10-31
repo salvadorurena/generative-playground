@@ -11,9 +11,9 @@ export const ASPECTS = {
 };
 
 export const POST_PARAMS = [
-  { key: 'grain', label: 'Grain', min: 0, max: 1, step: 0.01, value: 0.2 },
-  { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01, value: 0.3 },
-  { key: 'glow', label: 'Glow', min: 0, max: 1, step: 0.01, value: 0 },
+  { key: 'grain', label: 'Grain', min: 0, max: 1, step: 0.01, value: 0.2, help: 'Film-grain noise over the whole image.' },
+  { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01, value: 0.3, help: 'Darkens the edges to pull the eye inward.' },
+  { key: 'glow', label: 'Glow', min: 0, max: 1, step: 0.01, value: 0, help: 'Soft halo around bright areas. On light palettes it adds a soft shadow instead.' },
 ];
 
 export const state = {

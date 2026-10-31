@@ -1,12 +1,13 @@
 export default {
   name: 'Reaction–Diffusion',
+  description: 'Two simulated chemicals react and spread into organic patterns.',
   params: [
-    { key: 'pattern', label: 'Pattern', min: 0, max: 5, step: 1, value: 0, labels: ['Coral', 'Mitosis', 'Maze', 'Worms', 'Spots', 'Holes'] },
-    { key: 'res', label: 'Detail', min: 80, max: 320, step: 10, value: 180 },
-    { key: 'seeds', label: 'Seeds', min: 1, max: 40, step: 1, value: 12 },
-    { key: 'speed', label: 'Speed', min: 2, max: 30, step: 1, value: 12 },
-    { key: 'duration', label: 'Duration', min: 100, max: 900, step: 10, value: 400 },
-    { key: 'contrast', label: 'Contrast', min: 0.5, max: 3, step: 0.05, value: 1 },
+    { key: 'pattern', label: 'Pattern', min: 0, max: 5, step: 1, value: 0, labels: ['Coral', 'Mitosis', 'Maze', 'Worms', 'Spots', 'Holes'], help: 'Feed and kill rates for the Gray–Scott model; each grows differently.' },
+    { key: 'res', label: 'Detail', min: 80, max: 320, step: 10, value: 180, help: 'Simulation cells across the canvas. Higher is finer but slower.' },
+    { key: 'seeds', label: 'Seeds', min: 1, max: 40, step: 1, value: 12, help: 'Starting spots where the reaction begins.' },
+    { key: 'speed', label: 'Speed', min: 2, max: 30, step: 1, value: 12, help: 'Simulation steps per frame.' },
+    { key: 'duration', label: 'Duration', min: 100, max: 900, step: 10, value: 400, help: 'Frames to run before stopping.' },
+    { key: 'contrast', label: 'Contrast', min: 0.5, max: 3, step: 0.05, value: 1, help: 'How strongly concentration maps onto the palette.' },
   ],
   create({ ctx, w, h, rng, bg, inks, p }) {
     // Gray–Scott feed/kill rates for each pattern.
@@ -61,6 +62,7 @@ export default {
 
     let frame = 0;
     return {
+      progress: () => frame / p.duration,
       step() {
         for (let i = 0; i < p.speed; i++) iterate();
         const d = img.data;

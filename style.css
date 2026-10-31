@@ -136,6 +136,141 @@ input[type="range"] {
 
 #swatches span { flex: 1; }
 
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+button.icon {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--muted);
+  flex: none;
+}
+
+button.icon:hover { color: var(--text); }
+
+.hint {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.head .name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tooltips anchor to the whole field so they span the panel and never overflow it. */
+.field { position: relative; }
+
+button.tip {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+button.tip:hover, button.tip:focus-visible { opacity: 1; background: none; }
+
+button.tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: 22px;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #24242c;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+button.tip:hover::after, button.tip:focus::after { opacity: 1; }
+button.tip:not(:hover):not(:focus)::after { visibility: hidden; }
+
+#progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 2;
+  pointer-events: none;
+  transition: opacity 0.6s;
+}
+
+#progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+
+#progress.done { opacity: 0; }
+body.presenting #progress { display: none; }
+
+dialog {
+  width: min(380px, calc(100vw - 32px));
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.dialog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.dialog-head h2 {
+  font-size: 15px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.keys dt { justify-self: start; }
+.keys dd { margin: 0; color: var(--muted); }
+.keys kbd { font-size: 12px; opacity: 1; padding: 1px 7px; }
+
 #status {
   margin: 0;
   color: var(--muted);

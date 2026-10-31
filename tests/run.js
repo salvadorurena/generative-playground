@@ -7,6 +7,11 @@
 //   2. Deterministic — rendering twice gives the same pixels.
 //   3. Resolution independent — a 2× render matches 1× once both are averaged
 //      down to a thumbnail.
+//   4. SVG matches canvas — for vector modes, the exported SVG decodes as an
+//      image (valid file) and, redrawn element by element on a GPU canvas like
+//      the app's, matches the canvas render. (Comparing against the browser's
+//      SVG rasterizer instead would mostly measure antialiasing differences:
+//      it leaves seams between abutting shapes that GPU canvas doesn't.)
 // Thumbnails use an exact area average rather than drawImage scaling, which
 // samples instead of averaging for large reductions and varies by browser.
 
@@ -15,6 +20,7 @@ const THUMB_W = 80, THUMB_H = 50; // W and H must be integer multiples of these
 const CLOSE = 0.75;    // mean per-channel thumbnail diff (0–255) still counted as a baseline match
 const DET_TOL = 0.5;   // full-res mean diff tolerated between two runs (GPU raster jitter)
 const RES_TOL = 5;     // thumbnail diff allowed between 1× and 2× (thin-line antialiasing)
+const SVG_TOL = 0.5;   // thumbnail diff allowed between replayed SVG and canvas
 
 const NO_POST = { grain: 0, vignette: 0, glow: 0 };
 
@@ -71,6 +77,57 @@ function render(pg, c, k) {
   out.height = job.canvas.height;
   out.getContext('2d', { willReadFrequently: true }); // CPU-backed: bit-stable readback
   pg.compose(out, job.canvas, W, H, k, { post: { ...NO_POST, ...c.post }, bg: pg.PALETTES[c.palette][0], seed: c.seed });
+  return out;
+}
+
+// Exported SVG for a case. Throws if the browser can't decode it as an image.
+async function renderSvg(pg, c) {
+  const defaults = Object.fromEntries(pg.MODES[c.mode].params.map(q => [q.key, q.value]));
+  const job = pg.startSvgRender(W, H, { mode: c.mode, palette: c.palette, seed: c.seed, params: { ...defaults, ...c.params } });
+  for (let n = 0; !job.runner.step() && n < 5000; n++);
+  const text = job.svg.toString();
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+  try {
+    await imageFrom(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  return text;
+}
+
+// Draws the SVG's <rect>/<path> elements onto a GPU canvas with the same
+// attributes, so path data and styling are checked without rasterizer noise.
+function replaySvg(text) {
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d');
+  for (const m of text.matchAll(/<(rect|path) ([^>]*)\/>/g)) {
+    const a = Object.fromEntries([...m[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(v => [v[1], v[2]]));
+    ctx.globalAlpha = Number(a.opacity ?? 1);
+    if (m[1] === 'rect') {
+      ctx.fillStyle = a.fill;
+      ctx.fillRect(+a.x, +a.y, +a.width, +a.height);
+      continue;
+    }
+    const path = new Path2D(a.d);
+    if (a.fill !== 'none') {
+      ctx.fillStyle = a.fill;
+      ctx.fill(path);
+    }
+    if (a.stroke) {
+      ctx.strokeStyle = a.stroke;
+      ctx.lineWidth = Number(a['stroke-width'] ?? 1);
+      ctx.lineCap = a['stroke-linecap'] ?? 'butt';
+      ctx.lineJoin = a['stroke-linejoin'] ?? 'miter';
+      ctx.miterLimit = Number(a['stroke-miterlimit'] ?? 4);
+      ctx.stroke(path);
+    }
+  }
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  out.getContext('2d', { willReadFrequently: true }).drawImage(cv, 0, 0);
   return out;
 }
 
@@ -185,6 +242,8 @@ async function run() {
       thumb: t.toDataURL('image/png'),
       detDiff: determinism(pg, c, a, h),
       resDiff: diff(t, thumb(render(pg, c, 2))),
+      // Finish effects are raster-only, so only plain cases can be compared with SVG.
+      svgDiff: pg.MODES[c.mode].vector && !c.post ? diff(t, thumb(replaySvg(await renderSvg(pg, c)))) : null,
     };
 
     const ref = expected[c.name];
@@ -198,7 +257,7 @@ async function run() {
       r.baseDiff = diff(t, refThumb);
       r.baseline = r.baseDiff <= CLOSE ? 'close' : 'fail';
     }
-    r.ok = r.baseline !== 'fail' && r.detDiff <= DET_TOL && r.resDiff <= RES_TOL;
+    r.ok = r.baseline !== 'fail' && r.detDiff <= DET_TOL && r.resDiff <= RES_TOL && (r.svgDiff ?? 0) <= SVG_TOL;
     results.push(r);
 
     const tr = document.createElement('tr');
@@ -213,7 +272,8 @@ async function run() {
         missing: chip('warn', 'no baseline'),
       }[r.baseline]}</td>
       <td>${r.detDiff === 0 ? chip('pass', 'yes') : chip(r.detDiff <= DET_TOL ? 'warn' : 'fail', `${r.detDiff <= DET_TOL ? '≈' : 'no'} · Δ${r.detDiff.toFixed(2)}`)}</td>
-      <td>${r.resDiff <= RES_TOL ? chip('pass', `Δ${r.resDiff.toFixed(2)}`) : chip('fail', `Δ${r.resDiff.toFixed(2)}`)}</td>`;
+      <td>${r.resDiff <= RES_TOL ? chip('pass', `Δ${r.resDiff.toFixed(2)}`) : chip('fail', `Δ${r.resDiff.toFixed(2)}`)}</td>
+      <td>${r.svgDiff === null ? '<span class="none">—</span>' : chip(r.svgDiff <= SVG_TOL ? 'pass' : 'fail', `Δ${r.svgDiff.toFixed(2)}`)}</td>`;
     const shown = document.createElement('canvas');
     shown.width = W;
     shown.height = H;

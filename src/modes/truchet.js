@@ -2,15 +2,17 @@ import { TAU } from '../math.js';
 
 export default {
   name: 'Truchet Tiles',
+  description: 'Simple rotated tiles that join into mazes and weaves.',
+  vector: true, // draws only paths, so it can export SVG
   params: [
-    { key: 'tiles', label: 'Tiles across', min: 4, max: 60, step: 1, value: 16 },
-    { key: 'style', label: 'Style', min: 0, max: 3, step: 1, value: 1, labels: ['Arcs', 'Outlined arcs', 'Diagonals', 'Triangles'] },
-    { key: 'width', label: 'Line width', min: 0.05, max: 0.5, step: 0.01, value: 0.18 },
-    { key: 'bias', label: 'Flow', min: 0, max: 1, step: 0.01, value: 0.3 },
-    { key: 'colors', label: 'Colors', min: 1, max: 4, step: 1, value: 3 },
-    { key: 'regions', label: 'Color regions', min: 0.5, max: 6, step: 0.1, value: 1.5 },
+    { key: 'tiles', label: 'Tiles across', min: 4, max: 60, step: 1, value: 16, help: 'Tiles across the shorter side of the canvas.' },
+    { key: 'style', label: 'Style', min: 0, max: 3, step: 1, value: 1, labels: ['Arcs', 'Outlined arcs', 'Diagonals', 'Triangles'], help: 'The motif drawn on each tile.' },
+    { key: 'width', label: 'Line width', min: 0.05, max: 0.5, step: 0.01, value: 0.18, help: 'Line thickness relative to the tile.' },
+    { key: 'bias', label: 'Flow', min: 0, max: 1, step: 0.01, value: 0.3, help: 'How much a smooth noise field orients the tiles. 0 is coin flips; higher makes longer, flowing paths.' },
+    { key: 'colors', label: 'Colors', min: 1, max: 4, step: 1, value: 3, help: 'How many palette inks to use.' },
+    { key: 'regions', label: 'Color regions', min: 0.5, max: 6, step: 0.1, value: 1.5, help: 'Size of the color patches.' },
   ],
-  create({ ctx, w, h, rng, noise, bg, inks, p }) {
+  create({ ctx, w, h, rng, noise, bg, inks, p, path }) {
     const s = Math.min(w, h) / p.tiles;
     const cols = Math.ceil(w / s), rows = Math.ceil(h / s);
     const x0 = (w - cols * s) / 2, y0 = (h - rows * s) / 2;
@@ -32,31 +34,32 @@ export default {
     }
     tiles.sort((a, b) => a.d - b.d); // ripple out from the center
 
-    const addTile = (path, t) => {
+    const addTile = (target, t) => {
       const { x, y } = t, hs = s / 2;
       if (p.style <= 1) {
         if (!t.flip) {
-          path.moveTo(x + hs, y); path.arc(x, y, hs, 0, Math.PI / 2);
-          path.moveTo(x + hs, y + s); path.arc(x + s, y + s, hs, Math.PI, Math.PI * 1.5);
+          target.moveTo(x + hs, y); target.arc(x, y, hs, 0, Math.PI / 2);
+          target.moveTo(x + hs, y + s); target.arc(x + s, y + s, hs, Math.PI, Math.PI * 1.5);
         } else {
-          path.moveTo(x + s, y + hs); path.arc(x + s, y, hs, Math.PI / 2, Math.PI);
-          path.moveTo(x, y + hs); path.arc(x, y + s, hs, Math.PI * 1.5, TAU);
+          target.moveTo(x + s, y + hs); target.arc(x + s, y, hs, Math.PI / 2, Math.PI);
+          target.moveTo(x, y + hs); target.arc(x, y + s, hs, Math.PI * 1.5, TAU);
         }
       } else if (p.style === 2) {
-        if (!t.flip) { path.moveTo(x, y); path.lineTo(x + s, y + s); }
-        else { path.moveTo(x + s, y); path.lineTo(x, y + s); }
+        if (!t.flip) { target.moveTo(x, y); target.lineTo(x + s, y + s); }
+        else { target.moveTo(x + s, y); target.lineTo(x, y + s); }
       } else {
-        if (!t.flip) { path.moveTo(x, y); path.lineTo(x + s, y); path.lineTo(x, y + s); }
-        else { path.moveTo(x + s, y); path.lineTo(x + s, y + s); path.lineTo(x, y); }
-        path.closePath();
+        if (!t.flip) { target.moveTo(x, y); target.lineTo(x + s, y); target.lineTo(x, y + s); }
+        else { target.moveTo(x + s, y); target.lineTo(x + s, y + s); target.lineTo(x, y); }
+        target.closePath();
       }
     };
 
     const perFrame = Math.ceil(tiles.length / 60);
     let next = 0;
     return {
+      progress: () => Math.min(1, next / tiles.length),
       step() {
-        const paths = inks.map(() => new Path2D()), all = new Path2D();
+        const paths = inks.map(() => path()), all = path();
         for (const t of tiles.slice(next, next + perFrame)) {
           addTile(paths[t.ci], t);
           addTile(all, t);
@@ -70,9 +73,9 @@ export default {
           ctx.stroke(all);
         }
         ctx.lineWidth = p.width * s;
-        paths.forEach((path, i) => {
-          if (p.style === 3) { ctx.fillStyle = inks[i]; ctx.fill(path); }
-          else { ctx.strokeStyle = inks[i]; ctx.stroke(path); }
+        paths.forEach((shape, i) => {
+          if (p.style === 3) { ctx.fillStyle = inks[i]; ctx.fill(shape); }
+          else { ctx.strokeStyle = inks[i]; ctx.stroke(shape); }
         });
         return next >= tiles.length;
       },

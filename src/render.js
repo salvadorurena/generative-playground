@@ -1,10 +1,29 @@
 import { MODES } from './modes/index.js';
 import { PALETTES } from './palettes.js';
 import { mulberry32, makeNoise } from './random.js';
+import { SvgContext, SvgPath } from './svg.js';
 
 // Rendering: no UI or app state in here, so tests and export can drive it directly.
 // Modes draw onto an offscreen "art" canvas; compose() copies it to the
 // target and layers the finish effects on top, so effects never accumulate.
+
+// Clears ctx to the background and starts the mode. `path` makes the path
+// objects the mode draws with (Path2D for canvas, SvgPath for SVG).
+function begin(ctx, w, h, spec, path) {
+  const colors = PALETTES[spec.palette];
+  ctx.fillStyle = colors[0];
+  ctx.fillRect(0, 0, w, h);
+
+  const rng = mulberry32(spec.seed);
+  return MODES[spec.mode].create({
+    ctx, w, h, rng,
+    noise: makeNoise(rng),
+    bg: colors[0],
+    inks: colors.slice(1),
+    p: { ...spec.params },
+    path,
+  });
+}
 
 // spec: { mode, palette, seed, params } — see currentSpec() in state.js.
 export function startRender(w, h, k, spec) {
@@ -13,20 +32,14 @@ export function startRender(w, h, k, spec) {
   canvas.height = Math.max(1, Math.round(h * k));
   const ctx = canvas.getContext('2d');
   ctx.setTransform(k, 0, 0, k, 0, 0);
+  return { canvas, runner: begin(ctx, w, h, spec, () => new Path2D()) };
+}
 
-  const colors = PALETTES[spec.palette];
-  ctx.fillStyle = colors[0];
-  ctx.fillRect(0, 0, w, h);
-
-  const rng = mulberry32(spec.seed);
-  const runner = MODES[spec.mode].create({
-    ctx, w, h, rng,
-    noise: makeNoise(rng),
-    bg: colors[0],
-    inks: colors.slice(1),
-    p: { ...spec.params },
-  });
-  return { canvas, runner };
+// Same piece as startRender, recorded as SVG. Only for modes with `vector: true`;
+// finish effects are raster-only and not included.
+export function startSvgRender(w, h, spec) {
+  const svg = new SvgContext(w, h);
+  return { svg, runner: begin(svg, w, h, spec, () => new SvgPath()) };
 }
 
 function isLight(hex) {

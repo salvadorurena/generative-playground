@@ -1,6 +1,6 @@
 import { MODES } from './modes/index.js';
 import { PALETTES } from './palettes.js';
-import { startRender, compose } from './render.js';
+import { startRender, startSvgRender, compose } from './render.js';
 import {
   ASPECTS, POST_PARAMS, state, snapshot, applySnapshot, readHash, writeHash, currentSpec, currentLook,
 } from './state.js';
@@ -72,13 +72,26 @@ function loop() {
   updateStatus();
 }
 
+const progressEl = $('progress');
+
+// 0–1 from the mode's progress(), or null if it doesn't report one.
+function progressOf(runner) {
+  const p = runner?.progress?.();
+  return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : null;
+}
+
 function updateStatus() {
+  const pct = done ? 1 : progressOf(render?.runner);
   let text;
   if (performance.now() < flashUntil) text = flashMsg;
   else if (recorder) text = `● Recording · ${((performance.now() - recordStart) / 1000).toFixed(1)}s`;
   else if (exporting) text = exportMsg;
-  else text = done ? `Done · ${frames} frames` : paused ? 'Paused' : `Rendering · frame ${frames}`;
+  else if (done) text = `Done · ${frames} frames`;
+  else if (paused) text = 'Paused';
+  else text = pct === null ? `Rendering · frame ${frames}` : `Rendering · ${Math.round(pct * 100)}%`;
   if (statusEl.textContent !== text) statusEl.textContent = text;
+  progressEl.firstElementChild.style.transform = `scaleX(${pct ?? 0})`;
+  progressEl.classList.toggle('done', done);
 }
 
 function flash(msg) {
@@ -98,6 +111,7 @@ const MAX_EXPORT_AREA = 4096 * 4096; // Safari's canvas area limit
 
 const exportSel = $('exportSize');
 const saveBtn = $('save');
+const svgBtn = $('saveSvg');
 
 function exportScale(choice) {
   const { w, h, dpr } = size;
@@ -115,6 +129,22 @@ function updateExportLabels() {
 
 const nextFrame = () => new Promise(r => requestAnimationFrame(r));
 
+// Steps a runner to completion, yielding to the browser every ~24ms.
+async function runToEnd(runner) {
+  let t = performance.now();
+  exportMsg = 'Exporting…';
+  while (!runner.step()) {
+    if (performance.now() - t > 24) {
+      const pct = progressOf(runner);
+      exportMsg = pct === null ? 'Exporting…' : `Exporting · ${Math.round(pct * 100)}%`;
+      await nextFrame();
+      t = performance.now();
+    }
+  }
+}
+
+const fileName = ext => `${state.mode}-${state.palette.toLowerCase()}-${state.seed}.${ext}`;
+
 function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -131,21 +161,12 @@ async function savePng() {
     const { w, h, dpr } = size;
     const k = exportScale(exportSel.value);
     const look = currentLook();
-    const name = `${state.mode}-${state.palette.toLowerCase()}-${state.seed}.png`;
+    const name = fileName('png');
     let out = view;
     // Re-render offscreen unless the on-screen piece is already the requested size.
     if (k !== dpr || !done) {
       const job = startRender(w, h, k, currentSpec());
-      let n = 0, t = performance.now();
-      exportMsg = 'Exporting…';
-      while (!job.runner.step()) {
-        n++;
-        if (performance.now() - t > 24) {
-          exportMsg = `Exporting · frame ${n}`;
-          await nextFrame();
-          t = performance.now();
-        }
-      }
+      await runToEnd(job.runner);
       out = document.createElement('canvas');
       out.width = job.canvas.width;
       out.height = job.canvas.height;
@@ -161,6 +182,34 @@ async function savePng() {
     exporting = false;
     saveBtn.disabled = false;
   }
+}
+
+async function saveSvg() {
+  if (exporting || !MODES[state.mode].vector) return;
+  exporting = true;
+  saveBtn.disabled = svgBtn.disabled = true;
+  try {
+    const name = fileName('svg');
+    const job = startSvgRender(size.w, size.h, currentSpec());
+    await runToEnd(job.runner);
+    const text = job.svg.toString();
+    download(new Blob([text], { type: 'image/svg+xml' }), name);
+    flash(`Saved SVG · ${Math.max(1, Math.round(text.length / 1024))} KB`);
+  } catch {
+    flash('SVG export failed');
+  } finally {
+    exporting = false;
+    saveBtn.disabled = false;
+    paintSvgButton();
+  }
+}
+
+function paintSvgButton() {
+  const vector = !!MODES[state.mode].vector;
+  svgBtn.disabled = !vector || exporting;
+  svgBtn.title = vector
+    ? 'Vector file for Illustrator, Figma or a pen plotter (finish effects not included)'
+    : `${MODES[state.mode].name} is pixel-based or too dense for SVG — use PNG`;
 }
 
 // ---------- Video ----------
@@ -288,6 +337,7 @@ function renderFavorites() {
 const modeSel = $('mode'), paletteSel = $('palette'), aspectSel = $('aspect'), seedInput = $('seed');
 
 const decimals = step => (String(step).split('.')[1] || '').length;
+const escapeAttr = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 const LOCK_ICON = {
   on: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
@@ -298,7 +348,10 @@ const LOCK_ICON = {
 function makeSlider(q, values, onChange, locks) {
   const label = document.createElement('label');
   label.className = 'field';
-  label.innerHTML = `<span class="head"><span class="label">${q.label}</span><span class="right"><output></output></span></span>`;
+  const tip = q.help
+    ? `<button type="button" class="tip" aria-label="About ${escapeAttr(q.label)}: ${escapeAttr(q.help)}" data-tip="${escapeAttr(q.help)}">?</button>`
+    : '';
+  label.innerHTML = `<span class="head"><span class="name"><span class="label">${q.label}</span>${tip}</span><span class="right"><output></output></span></span>`;
   const out = label.querySelector('output');
   const input = document.createElement('input');
   Object.assign(input, { type: 'range', min: q.min, max: q.max, step: q.step });
@@ -356,6 +409,8 @@ function syncControls() {
   aspectSel.value = state.aspect;
   seedInput.value = state.seed;
   $('swatches').innerHTML = PALETTES[state.palette].map(c => `<span style="background:${c}"></span>`).join('');
+  $('modeDesc').textContent = MODES[state.mode].description ?? '';
+  paintSvgButton();
   buildParams();
   buildPost();
 }
@@ -402,6 +457,13 @@ async function copyLink() {
   }
 }
 
+const helpDlg = $('help');
+
+function toggleHelp() {
+  if (helpDlg.open) helpDlg.close();
+  else helpDlg.showModal();
+}
+
 let hintTimer;
 function setPresenting(on) {
   if (presenting === on) return;
@@ -434,6 +496,9 @@ $('share').addEventListener('click', copyLink);
 $('present').addEventListener('click', () => setPresenting(true));
 $('favorite').addEventListener('click', addFavorite);
 saveBtn.addEventListener('click', savePng);
+svgBtn.addEventListener('click', saveSvg);
+$('helpBtn').addEventListener('click', toggleHelp);
+$('helpClose').addEventListener('click', () => helpDlg.close());
 recordBtn.addEventListener('click', toggleRecording);
 
 document.addEventListener('fullscreenchange', () => {
@@ -442,6 +507,8 @@ document.addEventListener('fullscreenchange', () => {
 
 window.addEventListener('keydown', e => {
   if (e.target.matches('input[type="number"], select') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === '?') { toggleHelp(); return; }
+  if (helpDlg.open) return; // the dialog handles Esc itself
   const key = e.key.toLowerCase();
   if (key === 'r') randomize();
   else if (key === 's') savePng();
@@ -458,7 +525,7 @@ window.addEventListener('resize', () => {
 });
 
 // Test hook: tests/index.html renders cases through this.
-window.__playground = { MODES, PALETTES, startRender, compose };
+window.__playground = { MODES, PALETTES, startRender, startSvgRender, compose };
 
 readHash();
 syncControls();

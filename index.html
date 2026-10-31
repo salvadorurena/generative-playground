@@ -9,7 +9,10 @@
 <body>
   <aside id="panel">
     <header>
-      <h1>Generative Playground</h1>
+      <div class="title-row">
+        <h1>Generative Playground</h1>
+        <button id="helpBtn" type="button" class="icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+      </div>
       <p class="sub">Tweak the sliders. Every seed is a new piece.</p>
     </header>
 
@@ -18,6 +21,7 @@
         <span class="label">Mode</span>
         <select id="mode"></select>
       </label>
+      <p id="modeDesc" class="hint"></p>
       <label class="field">
         <span class="label">Palette</span>
         <select id="palette"></select>
@@ -63,6 +67,7 @@
         <select id="exportSize"></select>
       </label>
       <button id="save" type="button" class="primary">Save PNG <kbd>S</kbd></button>
+      <button id="saveSvg" type="button">Save SVG</button>
       <button id="record" type="button">Record video <kbd>V</kbd></button>
     </section>
 
@@ -76,9 +81,27 @@
   </aside>
 
   <main id="stage">
+    <div id="progress" aria-hidden="true"><span></span></div>
     <canvas id="canvas"></canvas>
     <div id="hint">Press F or Esc to exit</div>
   </main>
+
+  <dialog id="help" aria-labelledby="helpTitle">
+    <div class="dialog-head">
+      <h2 id="helpTitle">Keyboard shortcuts</h2>
+      <button id="helpClose" type="button" class="icon" aria-label="Close">×</button>
+    </div>
+    <dl class="keys">
+      <dt><kbd>R</kbd></dt><dd>Randomize (locked sliders stay put)</dd>
+      <dt><kbd>Space</kbd></dt><dd>Pause / resume</dd>
+      <dt><kbd>S</kbd></dt><dd>Save PNG at the chosen size</dd>
+      <dt><kbd>V</kbd></dt><dd>Record / stop video</dd>
+      <dt><kbd>F</kbd></dt><dd>Present fullscreen</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Leave present mode / close this</dd>
+      <dt><kbd>?</kbd></dt><dd>Show / hide this list</dd>
+    </dl>
+    <p class="hint">Shortcuts are ignored while typing in the seed box or a menu has focus.</p>
+  </dialog>
 
   <script type="module" src="src/main.js"></script>
 </body>

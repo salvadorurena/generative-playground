@@ -1,14 +1,16 @@
 export default {
   name: 'Voronoi Mosaic',
+  description: 'Stained glass: each cell is the area closest to one seed point.',
+  vector: true, // draws only paths, so it can export SVG
   params: [
-    { key: 'cells', label: 'Cells', min: 20, max: 2000, step: 10, value: 400 },
-    { key: 'order', label: 'Order', min: 0, max: 1, step: 0.01, value: 0.2 },
-    { key: 'cluster', label: 'Clustering', min: 0, max: 1, step: 0.01, value: 0.4 },
-    { key: 'regions', label: 'Color regions', min: 0.5, max: 8, step: 0.1, value: 2 },
-    { key: 'lead', label: 'Lead width', min: 0, max: 8, step: 0.1, value: 2.5 },
-    { key: 'shade', label: 'Shading', min: 0, max: 1, step: 0.01, value: 0.4 },
+    { key: 'cells', label: 'Cells', min: 20, max: 2000, step: 10, value: 400, help: 'Number of glass pieces.' },
+    { key: 'order', label: 'Order', min: 0, max: 1, step: 0.01, value: 0.2, help: 'From scattered (0) to an even honeycomb (1).' },
+    { key: 'cluster', label: 'Clustering', min: 0, max: 1, step: 0.01, value: 0.4, help: 'Bunches small cells together in some areas, leaving big cells elsewhere.' },
+    { key: 'regions', label: 'Color regions', min: 0.5, max: 8, step: 0.1, value: 2, help: 'Size of the color patches. Higher gives smaller, busier patches.' },
+    { key: 'lead', label: 'Lead width', min: 0, max: 8, step: 0.1, value: 2.5, help: 'Width of the dark lines between cells.' },
+    { key: 'shade', label: 'Shading', min: 0, max: 1, step: 0.01, value: 0.4, help: 'Random tonal variation between cells.' },
   ],
-  create({ ctx, w, h, rng, noise, bg, inks, p }) {
+  create({ ctx, w, h, rng, noise, bg, inks, p, path }) {
     const n = p.cells;
     const cs = 3 / Math.min(w, h), ox = rng() * 1000;
 
@@ -61,8 +63,9 @@ export default {
     const perFrame = Math.ceil(n / 90);
     let next = 0;
     return {
+      progress: () => Math.min(1, next / sites.length),
       step() {
-        const fills = new Map(), lead = new Path2D();
+        const fills = new Map(), lead = path();
         for (const s of sites.slice(next, next + perFrame)) {
           const poly = cellPoly(s);
           if (poly.length < 6) continue;
@@ -70,21 +73,21 @@ export default {
           const ci = Math.min(inks.length - 1, Math.floor((n01 + (s.r - 0.5) * 0.4) * inks.length));
           const level = Math.floor(s.r * 3);
           const key = `${Math.max(0, ci)}:${level}`;
-          if (!fills.has(key)) fills.set(key, new Path2D());
-          const path = new Path2D();
-          path.moveTo(poly[0], poly[1]);
-          for (let i = 2; i < poly.length; i += 2) path.lineTo(poly[i], poly[i + 1]);
-          path.closePath();
-          fills.get(key).addPath(path);
-          lead.addPath(path);
+          if (!fills.has(key)) fills.set(key, path());
+          const cell = path();
+          cell.moveTo(poly[0], poly[1]);
+          for (let i = 2; i < poly.length; i += 2) cell.lineTo(poly[i], poly[i + 1]);
+          cell.closePath();
+          fills.get(key).addPath(cell);
+          lead.addPath(cell);
         }
         next += perFrame;
         ctx.lineJoin = 'round';
-        for (const [key, path] of fills) {
+        for (const [key, shape] of fills) {
           const [ci, level] = key.split(':').map(Number);
           ctx.globalAlpha = 1 - p.shade * level * 0.3;
           ctx.fillStyle = inks[ci];
-          ctx.fill(path);
+          ctx.fill(shape);
         }
         if (p.lead > 0) {
           ctx.globalAlpha = 1;
