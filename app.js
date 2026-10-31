@@ -225,61 +225,205 @@ const MODES = {
   },
 };
 
+// ---------- Canvas & finish options ----------
+
+const ASPECTS = {
+  fill: 'Fill window',
+  '1:1': 'Square 1:1',
+  '4:5': 'Portrait 4:5',
+  '9:16': 'Story 9:16',
+  '3:2': 'Landscape 3:2',
+  '16:9': 'Wide 16:9',
+};
+
+const POST_PARAMS = [
+  { key: 'grain', label: 'Grain', min: 0, max: 1, step: 0.01, value: 0.2 },
+  { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01, value: 0.3 },
+  { key: 'glow', label: 'Glow', min: 0, max: 1, step: 0.01, value: 0 },
+];
+
+const EXPORT_SIZES = { screen: 'Screen', x2: '2×', print: 'Print' };
+const MAX_EXPORT_AREA = 4096 * 4096; // Safari's canvas area limit
+
 // ---------- State ----------
 
 const state = {
   mode: 'flow',
   palette: 'Ember',
+  aspect: 'fill',
   seed: Math.floor(Math.random() * 1e6),
   params: Object.fromEntries(
     Object.entries(MODES).map(([k, m]) => [k, Object.fromEntries(m.params.map(q => [q.key, q.value]))])
   ),
+  locks: Object.fromEntries(Object.keys(MODES).map(k => [k, new Set()])),
+  post: Object.fromEntries(POST_PARAMS.map(q => [q.key, q.value])),
 };
+
+// A snapshot is everything needed to reproduce a piece; used by the URL hash and favorites.
+function snapshot() {
+  return {
+    m: state.mode, p: state.palette, s: state.seed, a: state.aspect,
+    v: { ...state.params[state.mode] }, x: { ...state.post },
+  };
+}
+
+function applySnapshot(h) {
+  if (MODES[h.m]) state.mode = h.m;
+  if (PALETTES[h.p]) state.palette = h.p;
+  if (Number.isFinite(h.s)) state.seed = h.s;
+  if (ASPECTS[h.a]) state.aspect = h.a;
+  if (h.v) Object.assign(state.params[state.mode], h.v);
+  if (h.x) Object.assign(state.post, h.x);
+}
 
 function readHash() {
   try {
-    const h = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-    if (MODES[h.m]) state.mode = h.m;
-    if (PALETTES[h.p]) state.palette = h.p;
-    if (Number.isFinite(h.s)) state.seed = h.s;
-    if (h.v) Object.assign(state.params[state.mode], h.v);
+    applySnapshot(JSON.parse(decodeURIComponent(location.hash.slice(1))));
   } catch { /* no or bad hash */ }
 }
 
 function writeHash() {
-  const h = { m: state.mode, p: state.palette, s: state.seed, v: state.params[state.mode] };
-  history.replaceState(null, '', '#' + encodeURIComponent(JSON.stringify(h)));
+  history.replaceState(null, '', '#' + encodeURIComponent(JSON.stringify(snapshot())));
 }
 
 // ---------- Rendering ----------
+// Modes draw onto an offscreen "art" canvas; compose() copies it to the
+// target and layers the finish effects on top, so effects never accumulate.
 
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const statusEl = document.getElementById('status');
-let runner = null, done = false, paused = false, dirty = true, frames = 0;
-
-function restart() {
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+function startRender(w, h, k) {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(w * k));
+  canvas.height = Math.max(1, Math.round(h * k));
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(k, 0, 0, k, 0, 0);
 
   const colors = PALETTES[state.palette];
-  ctx.globalAlpha = 1;
   ctx.fillStyle = colors[0];
   ctx.fillRect(0, 0, w, h);
 
   const rng = mulberry32(state.seed);
-  runner = MODES[state.mode].create({
+  const runner = MODES[state.mode].create({
     ctx, w, h, rng,
     noise: makeNoise(rng),
     bg: colors[0],
     inks: colors.slice(1),
-    p: state.params[state.mode],
+    p: { ...state.params[state.mode] },
   });
+  return { canvas, runner };
+}
+
+function currentLook() {
+  return { post: { ...state.post }, bg: PALETTES[state.palette][0], seed: state.seed };
+}
+
+function isLight(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+}
+
+let grainTile = null, grainSeed = null;
+function getGrainTile(seed) {
+  if (grainTile && grainSeed === seed) return grainTile;
+  const t = document.createElement('canvas');
+  t.width = t.height = 128;
+  const g = t.getContext('2d');
+  const img = g.createImageData(128, 128);
+  const rng = mulberry32(seed ^ 0x9e3779b9);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = rng() * 255;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  grainTile = t;
+  grainSeed = seed;
+  return t;
+}
+
+const glowCanvas = document.createElement('canvas');
+const glowCtx = glowCanvas.getContext('2d');
+
+// w, h are CSS-pixel dimensions; k is the pixel scale of art/out.
+function compose(out, art, w, h, k, look) {
+  const ctx = out.getContext('2d');
+  const { post } = look;
+  const W = art.width, H = art.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(art, 0, 0);
+
+  if (post.glow > 0) {
+    // Blur a quarter-size copy: much cheaper than blurring at full size.
+    glowCanvas.width = Math.max(1, Math.round(W / 4));
+    glowCanvas.height = Math.max(1, Math.round(H / 4));
+    glowCtx.filter = `blur(${Math.max(1, Math.min(w, h) * k * 0.012 / 4)}px)`;
+    glowCtx.drawImage(art, 0, 0, glowCanvas.width, glowCanvas.height);
+    ctx.globalCompositeOperation = isLight(look.bg) ? 'multiply' : 'screen';
+    ctx.globalAlpha = post.glow;
+    ctx.drawImage(glowCanvas, 0, 0, W, H);
+  }
+
+  if (post.vignette > 0) {
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.hypot(w, h) / 2);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${post.vignette * 0.8})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  if (post.grain > 0) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const pattern = ctx.createPattern(getGrainTile(look.seed), 'repeat');
+    pattern.setTransform(new DOMMatrix().scale(Math.max(1, k / 2)));
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = post.grain * 0.35;
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+const $ = id => document.getElementById(id);
+const view = $('canvas');
+const stage = $('stage');
+const statusEl = $('status');
+
+let render = null, size = { w: 1, h: 1, dpr: 1 };
+let done = false, paused = false, dirty = true, needsCompose = false, frames = 0;
+let presenting = false, exporting = false, exportMsg = '';
+let flashMsg = '', flashUntil = 0;
+
+function canvasSize() {
+  const pad = state.aspect === 'fill' || presenting ? 0 : 24;
+  const aw = stage.clientWidth - pad * 2, ah = stage.clientHeight - pad * 2;
+  if (state.aspect === 'fill') return { w: Math.max(1, aw), h: Math.max(1, ah) };
+  const [a, b] = state.aspect.split(':').map(Number);
+  let w = aw, h = aw * b / a;
+  if (h > ah) { h = ah; w = ah * a / b; }
+  return { w: Math.max(1, Math.floor(w)), h: Math.max(1, Math.floor(h)) };
+}
+
+function restart() {
+  const dpr = window.devicePixelRatio || 1;
+  const { w, h } = canvasSize();
+  view.style.width = w + 'px';
+  view.style.height = h + 'px';
+  view.width = Math.round(w * dpr);
+  view.height = Math.round(h * dpr);
+  view.classList.toggle('framed', state.aspect !== 'fill');
+  size = { w, h, dpr };
+  render = startRender(w, h, dpr);
   done = false;
   frames = 0;
+  updateExportLabels();
 }
 
 function loop() {
@@ -287,12 +431,31 @@ function loop() {
   if (dirty) {
     dirty = false;
     restart();
+    needsCompose = true;
   }
   if (!paused && !done) {
-    done = runner.step();
+    done = render.runner.step();
     frames++;
+    needsCompose = true;
   }
-  statusEl.textContent = done ? `Done · ${frames} frames` : paused ? 'Paused' : `Rendering · frame ${frames}`;
+  if (needsCompose) {
+    needsCompose = false;
+    compose(view, render.canvas, size.w, size.h, size.dpr, currentLook());
+  }
+  updateStatus();
+}
+
+function updateStatus() {
+  let text;
+  if (performance.now() < flashUntil) text = flashMsg;
+  else if (exporting) text = exportMsg;
+  else text = done ? `Done · ${frames} frames` : paused ? 'Paused' : `Rendering · frame ${frames}`;
+  if (statusEl.textContent !== text) statusEl.textContent = text;
+}
+
+function flash(msg) {
+  flashMsg = msg;
+  flashUntil = performance.now() + 2200;
 }
 
 function schedule() {
@@ -300,41 +463,206 @@ function schedule() {
   writeHash();
 }
 
+// ---------- Export ----------
+
+const exportSel = $('exportSize');
+const saveBtn = $('save');
+
+function exportScale(choice) {
+  const { w, h, dpr } = size;
+  let k = choice === 'print' ? 4096 / Math.max(w, h) : choice === 'x2' ? dpr * 2 : dpr;
+  if (w * k * h * k > MAX_EXPORT_AREA) k = Math.sqrt(MAX_EXPORT_AREA / (w * h));
+  return k;
+}
+
+function updateExportLabels() {
+  for (const opt of exportSel.options) {
+    const k = exportScale(opt.value);
+    opt.text = `${EXPORT_SIZES[opt.value]} · ${Math.round(size.w * k)}×${Math.round(size.h * k)}`;
+  }
+}
+
+const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+
+async function savePng() {
+  if (exporting) return;
+  exporting = true;
+  saveBtn.disabled = true;
+  try {
+    const { w, h, dpr } = size;
+    const k = exportScale(exportSel.value);
+    const look = currentLook();
+    const name = `${state.mode}-${state.palette.toLowerCase()}-${state.seed}.png`;
+    let out = view;
+    // Re-render offscreen unless the on-screen piece is already the requested size.
+    if (k !== dpr || !done) {
+      const job = startRender(w, h, k);
+      let n = 0, t = performance.now();
+      exportMsg = 'Exporting…';
+      while (!job.runner.step()) {
+        n++;
+        if (performance.now() - t > 24) {
+          exportMsg = `Exporting · frame ${n}`;
+          await nextFrame();
+          t = performance.now();
+        }
+      }
+      out = document.createElement('canvas');
+      out.width = job.canvas.width;
+      out.height = job.canvas.height;
+      compose(out, job.canvas, w, h, k, look);
+    }
+    const blob = await new Promise(r => out.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('toBlob failed');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    flash(`Saved ${out.width}×${out.height} PNG`);
+  } catch {
+    flash('Export failed — try a smaller size');
+  } finally {
+    exporting = false;
+    saveBtn.disabled = false;
+  }
+}
+
+// ---------- Favorites ----------
+
+const FAV_KEY = 'gp:favorites';
+const favBox = $('favorites');
+
+function loadFavorites() {
+  try { return JSON.parse(localStorage.getItem(FAV_KEY)) || []; } catch { return []; }
+}
+
+function storeFavorites() {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(favorites)); return true; } catch { return false; }
+}
+
+let favorites = loadFavorites();
+
+function addFavorite() {
+  const t = document.createElement('canvas');
+  const s = 200 / Math.max(view.width, view.height);
+  t.width = Math.round(view.width * s);
+  t.height = Math.round(view.height * s);
+  t.getContext('2d').drawImage(view, 0, 0, t.width, t.height);
+  favorites.unshift({ id: Date.now().toString(36), snap: snapshot(), thumb: t.toDataURL('image/jpeg', 0.8) });
+  favorites = favorites.slice(0, 60);
+  flash(storeFavorites() ? 'Saved to favorites' : 'Saved for this visit only (storage unavailable)');
+  renderFavorites();
+}
+
+function renderFavorites() {
+  favBox.innerHTML = '';
+  if (!favorites.length) {
+    favBox.innerHTML = '<p class="empty">Save a piece you like to keep it here.</p>';
+    return;
+  }
+  for (const f of favorites) {
+    const item = document.createElement('div');
+    item.className = 'fav';
+    const load = document.createElement('button');
+    load.type = 'button';
+    load.className = 'load';
+    load.title = `${MODES[f.snap.m]?.name ?? f.snap.m} · ${f.snap.p} · seed ${f.snap.s}`;
+    load.innerHTML = `<img alt="${load.title}" src="${f.thumb}">`;
+    load.addEventListener('click', () => {
+      applySnapshot(f.snap);
+      syncControls();
+      schedule();
+    });
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'del';
+    del.title = 'Remove';
+    del.textContent = '×';
+    del.addEventListener('click', () => {
+      favorites = favorites.filter(x => x.id !== f.id);
+      storeFavorites();
+      renderFavorites();
+    });
+    item.append(load, del);
+    favBox.append(item);
+  }
+}
+
 // ---------- UI ----------
 
-const $ = id => document.getElementById(id);
-const modeSel = $('mode'), paletteSel = $('palette'), seedInput = $('seed');
+const modeSel = $('mode'), paletteSel = $('palette'), aspectSel = $('aspect'), seedInput = $('seed');
 
 const decimals = step => (String(step).split('.')[1] || '').length;
+
+const LOCK_ICON = {
+  on: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  off: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 5.8-1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
+
+// Builds a labelled slider bound to values[q.key]. Pass a Set as `locks` to add a lock toggle.
+function makeSlider(q, values, onChange, locks) {
+  const label = document.createElement('label');
+  label.className = 'field';
+  label.innerHTML = `<span class="head"><span class="label">${q.label}</span><span class="right"><output></output></span></span>`;
+  const out = label.querySelector('output');
+  const input = document.createElement('input');
+  Object.assign(input, { type: 'range', min: q.min, max: q.max, step: q.step });
+  input.value = values[q.key];
+  out.textContent = Number(input.value).toFixed(decimals(q.step));
+  input.addEventListener('input', () => {
+    values[q.key] = Number(input.value);
+    out.textContent = Number(input.value).toFixed(decimals(q.step));
+    onChange();
+  });
+
+  if (locks) {
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.className = 'lock';
+    const paint = () => {
+      const on = locks.has(q.key);
+      lock.innerHTML = on ? LOCK_ICON.on : LOCK_ICON.off;
+      lock.setAttribute('aria-pressed', on);
+      lock.title = on ? 'Locked: Randomize keeps this value' : 'Lock this value during Randomize';
+    };
+    lock.addEventListener('click', e => {
+      e.preventDefault();
+      locks.has(q.key) ? locks.delete(q.key) : locks.add(q.key);
+      paint();
+    });
+    paint();
+    label.querySelector('.right').appendChild(lock);
+  }
+
+  label.appendChild(input);
+  return label;
+}
 
 function buildParams() {
   const box = $('params');
   box.innerHTML = '';
   for (const q of MODES[state.mode].params) {
-    const label = document.createElement('label');
-    label.className = 'field';
-    label.innerHTML = `<span class="head"><span class="label">${q.label}</span><output></output></span>`;
-    const out = label.querySelector('output');
-    const input = document.createElement('input');
-    Object.assign(input, { type: 'range', min: q.min, max: q.max, step: q.step });
-    input.value = state.params[state.mode][q.key];
-    out.textContent = Number(input.value).toFixed(decimals(q.step));
-    input.addEventListener('input', () => {
-      state.params[state.mode][q.key] = Number(input.value);
-      out.textContent = Number(input.value).toFixed(decimals(q.step));
-      schedule();
-    });
-    label.appendChild(input);
-    box.appendChild(label);
+    box.appendChild(makeSlider(q, state.params[state.mode], schedule, state.locks[state.mode]));
+  }
+}
+
+function buildPost() {
+  const box = $('post');
+  box.innerHTML = '';
+  for (const q of POST_PARAMS) {
+    box.appendChild(makeSlider(q, state.post, () => { needsCompose = true; writeHash(); }));
   }
 }
 
 function syncControls() {
   modeSel.value = state.mode;
   paletteSel.value = state.palette;
+  aspectSel.value = state.aspect;
   seedInput.value = state.seed;
   $('swatches').innerHTML = PALETTES[state.palette].map(c => `<span style="background:${c}"></span>`).join('');
   buildParams();
+  buildPost();
 }
 
 function newSeed() {
@@ -344,7 +672,9 @@ function newSeed() {
 
 function randomize() {
   newSeed();
+  const locks = state.locks[state.mode];
   for (const q of MODES[state.mode].params) {
+    if (locks.has(q.key)) continue;
     const steps = Math.round((q.max - q.min) / q.step);
     const v = q.min + Math.floor(Math.random() * (steps + 1)) * q.step;
     state.params[state.mode][q.key] = Number(v.toFixed(decimals(q.step)));
@@ -358,32 +688,70 @@ function togglePause() {
   $('pause').innerHTML = `${paused ? 'Resume' : 'Pause'} <kbd>Space</kbd>`;
 }
 
-function savePng() {
-  canvas.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${state.mode}-${state.palette.toLowerCase()}-${state.seed}.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
+async function copyLink() {
+  writeHash();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    flash('Link copied');
+  } catch {
+    // Fallback for browsers/frames that block the async clipboard API.
+    const ta = document.createElement('textarea');
+    ta.value = location.href;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    flash(ok ? 'Link copied' : 'Copy failed — use the address bar');
+  }
+}
+
+let hintTimer;
+function setPresenting(on) {
+  if (presenting === on) return;
+  presenting = on;
+  document.body.classList.toggle('presenting', on);
+  if (on) {
+    document.documentElement.requestFullscreen?.().catch(() => {});
+    $('hint').classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => $('hint').classList.remove('show'), 2500);
+  } else if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  dirty = true;
 }
 
 for (const [k, m] of Object.entries(MODES)) modeSel.add(new Option(m.name, k));
 for (const k of Object.keys(PALETTES)) paletteSel.add(new Option(k, k));
+for (const [k, label] of Object.entries(ASPECTS)) aspectSel.add(new Option(label, k));
+for (const k of Object.keys(EXPORT_SIZES)) exportSel.add(new Option(EXPORT_SIZES[k], k));
 
 modeSel.addEventListener('change', () => { state.mode = modeSel.value; syncControls(); schedule(); });
 paletteSel.addEventListener('change', () => { state.palette = paletteSel.value; syncControls(); schedule(); });
+aspectSel.addEventListener('change', () => { state.aspect = aspectSel.value; schedule(); });
 seedInput.addEventListener('change', () => { state.seed = Math.floor(Number(seedInput.value) || 0); schedule(); });
 $('reseed').addEventListener('click', () => { newSeed(); schedule(); });
 $('randomize').addEventListener('click', randomize);
 $('pause').addEventListener('click', togglePause);
-$('save').addEventListener('click', savePng);
+$('share').addEventListener('click', copyLink);
+$('present').addEventListener('click', () => setPresenting(true));
+$('favorite').addEventListener('click', addFavorite);
+saveBtn.addEventListener('click', savePng);
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) setPresenting(false);
+});
 
 window.addEventListener('keydown', e => {
-  if (e.target.matches('input[type="number"], select') || e.metaKey || e.ctrlKey) return;
-  if (e.key === 'r' || e.key === 'R') randomize();
-  else if (e.key === 's' || e.key === 'S') savePng();
-  else if (e.key === ' ') { e.preventDefault(); togglePause(); }
+  if (e.target.matches('input[type="number"], select') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === 'r') randomize();
+  else if (key === 's') savePng();
+  else if (key === 'f') setPresenting(!presenting);
+  else if (key === 'escape') setPresenting(false);
+  else if (key === ' ') { e.preventDefault(); togglePause(); }
 });
 
 let resizeTimer;
@@ -394,5 +762,6 @@ window.addEventListener('resize', () => {
 
 readHash();
 syncControls();
+renderFavorites();
 writeHash();
 loop();

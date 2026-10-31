@@ -15,14 +15,17 @@ Then open http://localhost:5173. `.claude/launch.json` has the same config for t
 ## Files
 
 - `index.html` — layout: control panel (`#panel`) and canvas stage (`#stage`).
-- `style.css` — dark UI; colors in `:root` variables; stacks vertically under 760px.
+- `style.css` — dark UI; colors in `:root` variables; stacks vertically under 760px; `body.presenting` hides the panel.
 - `app.js` — everything else, in sections:
   - **Randomness**: `mulberry32` seeded RNG and `makeNoise` (seeded 2D Perlin, ~[-1, 1]).
   - **Palettes**: `PALETTES` — first color is the background, the rest are inks.
   - **Modes**: `MODES` — Flow Field, Clifford Attractor, Fractal Bloom.
-  - **State**: `state` plus `readHash`/`writeHash` (URL hash holds mode, palette, seed, params).
-  - **Rendering**: `restart()` sizes the canvas for DPR and calls the mode's `create`; `loop()` steps it each animation frame.
-  - **UI**: controls are generated from each mode's param schema.
+  - **Canvas & finish options**: `ASPECTS`, `POST_PARAMS` (grain/vignette/glow), `EXPORT_SIZES`.
+  - **State**: `state`, plus `snapshot()`/`applySnapshot()` — the serializable description of a piece, shared by the URL hash and favorites. Slider locks (`state.locks`) are session-only.
+  - **Rendering**: `startRender(w, h, k)` draws a mode onto an offscreen *art* canvas at pixel scale `k`; `compose()` copies art to a target and layers finish effects on top. `loop()` steps the preview and recomposes when needed.
+  - **Export**: `savePng()` re-renders offscreen at the chosen scale (same seed → same image), composes, downloads. Capped at 4096² px area (Safari limit).
+  - **Favorites**: stored in `localStorage` (`gp:favorites`) as snapshot + JPEG thumbnail, max 60.
+  - **UI**: `makeSlider()` builds sliders from schemas (with optional lock toggle).
 
 ## Adding a mode
 
@@ -39,16 +42,18 @@ myMode: {
 }
 ```
 
-Sliders, randomize, URL sharing and export all work automatically from the schema.
+Sliders, locks, randomize, URL sharing, favorites and export all work automatically from the schema.
 
 ## Conventions
 
 - **Determinism**: all randomness inside a mode must come from `env.rng` / `env.noise` so a seed + params always reproduces the same image. `Math.random()` is only for picking new seeds and randomizing sliders.
 - **Performance**: batch drawing — build one `Path2D` per color and stroke/fill once per frame rather than per shape. Cap work per frame and return `true` from `step()` when done so the loop idles.
+- **Resolution independence**: modes run at any pixel scale — draw only in CSS-pixel units (`w`, `h`); never read `canvas.width` inside a mode. Export relies on this.
+- **Finish effects belong in `compose()`**, never in a mode — they must not accumulate across frames, and changing them recomposes without re-rendering.
 - **Keep params sane under Randomize**: any slider combination should produce something on-canvas without freezing the tab (e.g. Bloom auto-fits its size and caps segment count).
 - Match the existing style: 2-space indent, single quotes, semicolons, terse comments only where the math isn't obvious.
 - No external libraries or build tooling unless there's a strong reason.
 
 ## Keyboard shortcuts
 
-`R` randomize · `S` save PNG · `Space` pause/resume
+`R` randomize · `S` save PNG · `F` present (fullscreen) · `Esc` exit present · `Space` pause/resume

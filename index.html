@@ -24,6 +24,10 @@
       </label>
       <div id="swatches"></div>
       <label class="field">
+        <span class="label">Canvas</span>
+        <select id="aspect"></select>
+      </label>
+      <label class="field">
         <span class="label">Seed</span>
         <div class="row">
           <input id="seed" type="number" min="0" step="1">
@@ -32,19 +36,47 @@
       </label>
     </section>
 
-    <section class="group" id="params"></section>
+    <section class="group">
+      <h2>Shape</h2>
+      <div id="params" class="stack"></div>
+    </section>
+
+    <section class="group">
+      <h2>Finish</h2>
+      <div id="post" class="stack"></div>
+    </section>
 
     <section class="group actions">
       <button id="randomize" type="button">Randomize <kbd>R</kbd></button>
       <button id="pause" type="button">Pause <kbd>Space</kbd></button>
+      <div class="row">
+        <button id="share" type="button">Copy link</button>
+        <button id="present" type="button">Present <kbd>F</kbd></button>
+      </div>
+      <p id="status" aria-live="polite"></p>
+    </section>
+
+    <section class="group">
+      <h2>Export</h2>
+      <label class="field">
+        <span class="label">Size</span>
+        <select id="exportSize"></select>
+      </label>
       <button id="save" type="button" class="primary">Save PNG <kbd>S</kbd></button>
     </section>
 
-    <p id="status" aria-live="polite"></p>
+    <section class="group">
+      <div class="group-head">
+        <h2>Favorites</h2>
+        <button id="favorite" type="button" class="small">★ Save current</button>
+      </div>
+      <div id="favorites"></div>
+    </section>
   </aside>
 
   <main id="stage">
     <canvas id="canvas"></canvas>
+    <div id="hint">Press F or Esc to exit</div>
   </main>
 
   <script src="app.js"></script>
