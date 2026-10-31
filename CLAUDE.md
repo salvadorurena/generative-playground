@@ -22,27 +22,30 @@ Run it before and after any refactor. If a change is *meant* to alter output (ne
 
 ## Files
 
-- `tests/` — visual regression page (`index.html`, `run.js`), its `baseline.json`, and the dev `server.py`.
+Native ES modules, loaded from `index.html` via `<script type="module" src="src/main.js">`. They need an HTTP server — opening `index.html` as a `file://` URL won't work.
+
 - `index.html` — layout: control panel (`#panel`) and canvas stage (`#stage`).
 - `style.css` — dark UI; colors in `:root` variables; stacks vertically under 760px; `body.presenting` hides the panel.
-- `app.js` — everything else, in sections:
-  - **Randomness**: `mulberry32` seeded RNG and `makeNoise` (seeded 2D Perlin, ~[-1, 1]).
-  - **Palettes**: `PALETTES` — first color is the background, the rest are inks.
-  - **Modes**: `MODES` — Flow Field, Clifford Attractor, Fractal Bloom, Circle Packing, Voronoi Mosaic, Truchet Tiles, Reaction–Diffusion.
-  - **Canvas & finish options**: `ASPECTS`, `POST_PARAMS` (grain/vignette/glow), `EXPORT_SIZES`.
-  - **State**: `state`, plus `snapshot()`/`applySnapshot()` — the serializable description of a piece, shared by the URL hash and favorites. Slider locks (`state.locks`) are session-only.
-  - **Rendering**: `startRender(w, h, k)` draws a mode onto an offscreen *art* canvas at pixel scale `k`; `compose()` copies art to a target and layers finish effects on top. `loop()` steps the preview and recomposes when needed.
+- `src/modes/` — one file per mode (`export default { name, params, create }`); `index.js` registers them in `MODES` (its order is the menu order). Modes are self-contained: they import nothing but `TAU` and get everything else through `create(env)`.
+- `src/random.js` — `mulberry32` seeded RNG and `makeNoise` (seeded 2D Perlin, ~[-1, 1]).
+- `src/palettes.js` — `PALETTES`: first color is the background, the rest are inks.
+- `src/render.js` — pure rendering, no UI or app state. `startRender(w, h, k, spec)` draws a mode onto an offscreen *art* canvas at pixel scale `k`; `compose()` copies art to a target and layers finish effects (grain/vignette/glow) on top.
+- `src/state.js` — `state`, `ASPECTS`, `POST_PARAMS`; `snapshot()`/`applySnapshot()` (the serializable description of a piece, shared by the URL hash and favorites); `currentSpec()`/`currentLook()` turn state into `startRender`/`compose` arguments. Slider locks (`state.locks`) are session-only.
+- `src/main.js` — the app shell, in sections:
+  - **Render loop**: `restart()` sizes the canvas and starts a render; `loop()` steps it (respecting `pace`) and recomposes when needed.
   - **Export**: `savePng()` re-renders offscreen at the chosen scale (same seed → same image), composes, downloads. Capped at 4096² px area (Safari limit).
   - **Video**: `toggleRecording()` restarts the piece and records the visible canvas (`captureStream` + `MediaRecorder`, MP4 if supported else WebM) until it finishes, plus a short hold.
   - **Favorites**: stored in `localStorage` (`gp:favorites`) as snapshot + JPEG thumbnail, max 60.
-  - **UI**: `makeSlider()` builds sliders from schemas (with optional lock toggle).
+  - **UI**: `makeSlider()` builds sliders from schemas (with optional lock toggle and value `labels`); keyboard shortcuts; present mode.
+  - Sets `window.__playground` (`MODES`, `PALETTES`, `startRender`, `compose`) for the test page.
+- `tests/` — visual regression page (`index.html`, `run.js`), its `baseline.json`, and the dev `server.py`.
 
 ## Adding a mode
 
-Add an entry to `MODES`:
+Create `src/modes/myMode.js` and add it to `src/modes/index.js`:
 
 ```js
-myMode: {
+export default {
   name: 'Display Name',
   pace: 1, // optional: preview/recording calls step() every `pace` frames (for modes with few frames)
   params: [{ key, label, min, max, step, value, labels? }, ...], // labels: names for integer values 0..max
@@ -50,7 +53,7 @@ myMode: {
     // set up; draw in CSS pixels (w × h), canvas is already cleared to bg
     return { step() { /* draw one frame */ return finished; } };
   },
-}
+};
 ```
 
 Sliders, locks, randomize, URL sharing, favorites and export all work automatically from the schema. Then add cases for it in `tests/run.js` and update the baseline.
